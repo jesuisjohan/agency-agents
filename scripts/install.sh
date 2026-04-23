@@ -15,11 +15,13 @@
 #   antigravity  -- Copy skills to ~/.gemini/antigravity/skills/
 #   gemini-cli   -- Install extension to ~/.gemini/extensions/agency-agents/
 #   opencode     -- Copy agents to .opencode/agents/ in current directory
+#   forgecode    -- Copy agents to ~/forge/agents/
 #   cursor       -- Copy rules to .cursor/rules/ in current directory
 #   aider        -- Copy CONVENTIONS.md to current directory
 #   windsurf     -- Copy .windsurfrules to current directory
 #   openclaw     -- Copy workspaces to ~/.openclaw/agency-agents/
 #   qwen         -- Copy SubAgents to ~/.qwen/agents/ (user-wide) or .qwen/agents/ (project)
+#   kimi         -- Copy agents to ~/.config/kimi/agents/
 #   all          -- Install for all detected tools (default)
 #
 # Flags:
@@ -101,7 +103,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 INTEGRATIONS="$REPO_ROOT/integrations"
 
-ALL_TOOLS=(claude-code copilot antigravity gemini-cli opencode openclaw cursor aider windsurf qwen kimi)
+ALL_TOOLS=(claude-code copilot antigravity gemini-cli opencode forgecode openclaw cursor aider windsurf qwen kimi)
 
 # Standard agent category directories (keep sorted, sync with convert.sh / lint-agents.sh)
 AGENT_DIRS=(
@@ -113,7 +115,7 @@ AGENT_DIRS=(
 # Usage
 # ---------------------------------------------------------------------------
 usage() {
-  sed -n '3,32p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,34p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
@@ -144,6 +146,7 @@ detect_antigravity()  { [[ -d "${HOME}/.gemini/antigravity/skills" ]]; }
 detect_gemini_cli()   { command -v gemini >/dev/null 2>&1 || [[ -d "${HOME}/.gemini" ]]; }
 detect_cursor()       { command -v cursor >/dev/null 2>&1 || [[ -d "${HOME}/.cursor" ]]; }
 detect_opencode()     { command -v opencode >/dev/null 2>&1 || [[ -d "${HOME}/.config/opencode" ]]; }
+detect_forgecode()    { command -v forge >/dev/null 2>&1 || [[ -d "${HOME}/forge" ]]; }
 detect_aider()        { command -v aider >/dev/null 2>&1; }
 detect_openclaw()     { command -v openclaw >/dev/null 2>&1 || [[ -d "${HOME}/.openclaw" ]]; }
 detect_windsurf()     { command -v windsurf >/dev/null 2>&1 || [[ -d "${HOME}/.codeium" ]]; }
@@ -157,6 +160,7 @@ is_detected() {
     antigravity) detect_antigravity ;;
     gemini-cli)  detect_gemini_cli  ;;
     opencode)    detect_opencode    ;;
+    forgecode)   detect_forgecode   ;;
     openclaw)    detect_openclaw    ;;
     cursor)      detect_cursor      ;;
     aider)       detect_aider       ;;
@@ -175,6 +179,7 @@ tool_label() {
     antigravity) printf "%-14s  %s" "Antigravity"  "(~/.gemini/antigravity)" ;;
     gemini-cli)  printf "%-14s  %s" "Gemini CLI"   "(gemini extension)"      ;;
     opencode)    printf "%-14s  %s" "OpenCode"     "(opencode.ai)"           ;;
+    forgecode)   printf "%-14s  %s" "ForgeCode"    "(~/forge/agents)"       ;;
     openclaw)    printf "%-14s  %s" "OpenClaw"     "(~/.openclaw/agency-agents)" ;;
     cursor)      printf "%-14s  %s" "Cursor"       "(.cursor/rules)"         ;;
     aider)       printf "%-14s  %s" "Aider"        "(CONVENTIONS.md)"        ;;
@@ -401,6 +406,25 @@ install_opencode() {
   warn "OpenCode: project-scoped. Run from your project root to install there."
 }
 
+install_forgecode() {
+  local src="$INTEGRATIONS/forgecode/agents"
+  local dest="${HOME}/forge/agents"
+  local count=0
+
+  [[ -d "$src" ]] || { err "integrations/forgecode missing. Run ./scripts/convert.sh --tool forgecode first."; return 1; }
+
+  mkdir -p "$dest"
+
+  local f
+  while IFS= read -r -d '' f; do
+    cp "$f" "$dest/"
+    (( count++ )) || true
+  done < <(find "$src" -maxdepth 1 -name "*.md" -print0)
+
+  ok "ForgeCode: installed $count agents to $dest"
+  warn "ForgeCode: restart ForgeCode, then run ':agent' to confirm the new agents are loaded."
+}
+
 install_openclaw() {
   local src="$INTEGRATIONS/openclaw"
   local dest="${HOME}/.openclaw/agency-agents"
@@ -525,6 +549,7 @@ install_tool() {
     antigravity) install_antigravity ;;
     gemini-cli)  install_gemini_cli  ;;
     opencode)    install_opencode    ;;
+    forgecode)   install_forgecode   ;;
     openclaw)    install_openclaw    ;;
     cursor)      install_cursor      ;;
     aider)       install_aider       ;;

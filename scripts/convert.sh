@@ -13,6 +13,7 @@
 #   antigravity  — Antigravity skill files (~/.gemini/antigravity/skills/)
 #   gemini-cli   — Gemini CLI extension (skills/ + gemini-extension.json)
 #   opencode     — OpenCode agent files (.opencode/agents/*.md)
+#   forgecode    — ForgeCode agent files (~/forge/agents/*.md or .forge/agents/*.md)
 #   cursor       — Cursor rule files (.cursor/rules/*.mdc)
 #   aider        — Single CONVENTIONS.md for Aider
 #   windsurf     — Single .windsurfrules for Windsurf
@@ -68,7 +69,7 @@ AGENT_DIRS=(
 
 # --- Usage ---
 usage() {
-  sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
@@ -102,6 +103,41 @@ get_body() {
 # "Frontend Developer" → "frontend-developer"
 slugify() {
   echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//'
+}
+
+normalize_forgecode_tool() {
+  local raw normalized
+  raw="$1"
+  normalized="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]_-')"
+
+  case "$normalized" in
+    read)            printf 'read\n' ;;
+    write)           printf 'write\n' ;;
+    edit|patch)      printf 'patch\n' ;;
+    bash|shell)      printf 'shell\n' ;;
+    search)          printf 'search\n' ;;
+    fetch|webfetch|websearch)
+                     printf 'fetch\n' ;;
+    remove|delete)   printf 'remove\n' ;;
+    undo)            printf 'undo\n' ;;
+    *)               return 1 ;;
+  esac
+}
+
+forgecode_tools_block() {
+  local source_tools="$1"
+  local block="" seen=$'\n' raw mapped
+
+  [[ -n "$source_tools" ]] || return 0
+
+  while IFS= read -r raw; do
+    mapped="$(normalize_forgecode_tool "$raw" 2>/dev/null)" || continue
+    [[ "$seen" == *$'\n'"$mapped"$'\n'* ]] && continue
+    block+="  - ${mapped}"$'\n'
+    seen+="${mapped}"$'\n'
+  done < <(printf '%s\n' "$source_tools" | tr ',' '\n')
+
+  [[ -n "$block" ]] && printf '%s' "$block"
 }
 
 # --- Per-tool converters ---
@@ -223,6 +259,44 @@ color: '${color}'
 ---
 ${body}
 HEREDOC
+}
+
+convert_forgecode() {
+  local file="$1"
+  local name description tools slug outfile body tools_block
+
+  name="$(get_field "name" "$file")"
+  description="$(get_field "description" "$file")"
+  tools="$(get_field "tools" "$file")"
+  slug="$(slugify "$name")"
+  body="$(get_body "$file")"
+  tools_block="$(forgecode_tools_block "$tools")"
+
+  outfile="$OUT_DIR/forgecode/agents/${slug}.md"
+  mkdir -p "$(dirname "$outfile")"
+
+  # ForgeCode agent format: markdown with YAML frontmatter in ~/forge/agents/ or .forge/agents/.
+  if [[ -n "$tools_block" ]]; then
+    cat > "$outfile" <<HEREDOC
+---
+id: ${slug}
+title: ${name}
+description: ${description}
+tools:
+${tools_block}
+---
+${body}
+HEREDOC
+  else
+    cat > "$outfile" <<HEREDOC
+---
+id: ${slug}
+title: ${name}
+description: ${description}
+---
+${body}
+HEREDOC
+  fi
 }
 
 convert_cursor() {
@@ -502,6 +576,7 @@ run_conversions() {
         antigravity) convert_antigravity "$file" ;;
         gemini-cli)  convert_gemini_cli  "$file" ;;
         opencode)    convert_opencode    "$file" ;;
+        forgecode)   convert_forgecode   "$file" ;;
         cursor)      convert_cursor      "$file" ;;
         openclaw)    convert_openclaw    "$file" ;;
         qwen)        convert_qwen        "$file" ;;
@@ -536,7 +611,7 @@ main() {
     esac
   done
 
-  local valid_tools=("antigravity" "gemini-cli" "opencode" "cursor" "aider" "windsurf" "openclaw" "qwen" "kimi" "all")
+  local valid_tools=("antigravity" "gemini-cli" "opencode" "forgecode" "cursor" "aider" "windsurf" "openclaw" "qwen" "kimi" "all")
   local valid=false
   for t in "${valid_tools[@]}"; do [[ "$t" == "$tool" ]] && valid=true && break; done
   if ! $valid; then
@@ -555,7 +630,7 @@ main() {
 
   local tools_to_run=()
   if [[ "$tool" == "all" ]]; then
-    tools_to_run=("antigravity" "gemini-cli" "opencode" "cursor" "aider" "windsurf" "openclaw" "qwen" "kimi")
+    tools_to_run=("antigravity" "gemini-cli" "opencode" "forgecode" "cursor" "aider" "windsurf" "openclaw" "qwen" "kimi")
   else
     tools_to_run=("$tool")
   fi
@@ -566,7 +641,20 @@ main() {
 
   if $use_parallel && [[ "$tool" == "all" ]]; then
     # Tools that write to separate dirs can run in parallel; buffer output so each tool's output stays together
-    local parallel_tools=(antigravity gemini-cli opencode cursor openclaw qwen)
+    local parallel_tools=(antigravity gemini-cli opencode forgecode cursor openclaw qwen kimi)
+    local sequential_tools=()
+    local pt is_parallel
+    for t in "${tools_to_run[@]}"; do
+      is_parallel=false
+      for pt in "${parallel_tools[@]}"; do
+        if [[ "$pt" == "$t" ]]; then
+          is_parallel=true
+          break
+        fi
+      done
+      $is_parallel || sequential_tools+=("$t")
+    done
+
     local parallel_out_dir
     parallel_out_dir="$(mktemp -d)"
     info "Converting: ${#parallel_tools[@]}/${n_tools} tools in parallel (output buffered per tool)..."
@@ -578,8 +666,9 @@ main() {
       [[ -f "$parallel_out_dir/$t" ]] && cat "$parallel_out_dir/$t"
     done
     rm -rf "$parallel_out_dir"
-    local idx=7
-    for t in aider windsurf; do
+
+    local idx=$(( ${#parallel_tools[@]} + 1 ))
+    for t in "${sequential_tools[@]}"; do
       progress_bar "$idx" "$n_tools"
       printf "\n"
       header "Converting: $t ($idx/$n_tools)"
